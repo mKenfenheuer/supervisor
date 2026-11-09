@@ -32,6 +32,7 @@ from ..const import (
     ATTR_ENVIRONMENT,
     ATTR_FULL_ACCESS,
     ATTR_GPIO,
+    ATTR_GPU,
     ATTR_HASSIO_API,
     ATTR_HASSIO_ROLE,
     ATTR_HOMEASSISTANT,
@@ -584,6 +585,11 @@ class AppModel(JobGroup, ABC):
     def with_video(self) -> bool:
         """Return True if the app access to video."""
         return self.data[ATTR_VIDEO]
+
+    @property
+    def with_gpu(self) -> bool:
+        """Return True if the app access to GPU compute devices."""
+        return self.data[ATTR_GPU]
 
     @property
     def homeassistant_version(self) -> AwesomeVersion | None:

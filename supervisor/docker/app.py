@@ -49,6 +49,7 @@ from ..utils.sentinel import DEFAULT
 from ..utils.sentry import async_capture_exception
 from .const import (
     ADDON_BUILDER_IMAGE,
+    CDI_GPU_DEVICES,
     ENV_TIME,
     ENV_TOKEN,
     ENV_TOKEN_OLD,
@@ -277,6 +278,10 @@ class DockerApp(DockerInterface):
         if self.app.with_video:
             rules.update(self.sys_hardware.policy.get_cgroups_rules(PolicyGroup.VIDEO))
 
+        # GPU (DRM render nodes, AMD KFD, compute accelerators)
+        if self.app.with_gpu:
+            rules.update(self.sys_hardware.policy.get_cgroups_rules(PolicyGroup.GPU))
+
         # GPIO
         if self.app.with_gpio:
             rules.update(self.sys_hardware.policy.get_cgroups_rules(PolicyGroup.GPIO))
@@ -297,6 +302,24 @@ class DockerApp(DockerInterface):
         if rules:
             return list(rules)
         return None
+
+    @property
+    def device_requests(self) -> list[dict[str, Any]] | None:
+        """Return CDI device requests for app.
+
+        Docker injects device nodes and the host driver libraries (e.g. NVIDIA).
+        """
+        if not self.app.with_gpu:
+            return None
+
+        devices = [
+            device
+            for device in CDI_GPU_DEVICES
+            if device in self.sys_docker.info.cdi_devices
+        ]
+        if not devices:
+            return None
+        return [{"Driver": "cdi", "DeviceIDs": devices}]
 
     @property
     def ports(self) -> dict[str, str | int | None] | None:
@@ -714,6 +737,7 @@ class DockerApp(DockerInterface):
                 ports=self.ports,
                 extra_hosts=self.network_mapping,
                 device_cgroup_rules=self.cgroups_rules,
+                device_requests=self.device_requests,
                 cap_add=self.capabilities,
                 cap_drop=self.dropped_capabilities,
                 ulimits=self.ulimits,

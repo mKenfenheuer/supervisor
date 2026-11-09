@@ -20,6 +20,8 @@ class UdevSubsystem(StrEnum):
     GRAPHICS = "graphics"
     CEC = "cec"
     DRM = "drm"
+    KFD = "kfd"
+    ACCEL = "accel"
     HIDRAW = "hidraw"
     RPI_HEVCMEM = "rpivid-hevcmem"
     RPI_H264MEM = "rpivid-h264mem"
@@ -32,6 +34,7 @@ class PolicyGroup(StrEnum):
     GPIO = "gpio"
     USB = "usb"
     VIDEO = "video"
+    GPU = "gpu"
     AUDIO = "audio"
     BLUETOOTH = "bluetooth"
 

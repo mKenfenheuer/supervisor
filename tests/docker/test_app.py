@@ -1153,3 +1153,79 @@ async def test_app_run_drops_net_raw_with_feature_flag(
 
     assert run.call_args.kwargs["cap_add"] is None
     assert run.call_args.kwargs["cap_drop"] == [Capabilities.NET_RAW]
+
+
+@pytest.mark.usefixtures("path_extern", "tmp_supervisor_data")
+@pytest.mark.parametrize(
+    ("gpu", "cdi_devices", "expected"),
+    [
+        pytest.param(False, {"nvidia.com/gpu=all"}, None, id="gpu-disabled"),
+        pytest.param(True, set(), None, id="no-cdi-devices"),
+        pytest.param(True, {"vendor.com/other=all"}, None, id="unrelated-cdi-device"),
+        pytest.param(
+            True,
+            {"nvidia.com/gpu=0", "nvidia.com/gpu=all"},
+            [{"Driver": "cdi", "DeviceIDs": ["nvidia.com/gpu=all"]}],
+            id="nvidia",
+        ),
+        pytest.param(
+            True,
+            {"nvidia.com/gpu=all", "amd.com/gpu=all"},
+            [
+                {
+                    "Driver": "cdi",
+                    "DeviceIDs": ["nvidia.com/gpu=all", "amd.com/gpu=all"],
+                }
+            ],
+            id="nvidia-and-amd",
+        ),
+    ],
+)
+async def test_app_gpu_device_requests(
+    coresys: CoreSys,
+    install_app_ssh: App,
+    gpu: bool,
+    cdi_devices: set[str],
+    expected: list[dict[str, Any]] | None,
+):
+    """Test GPU apps request the CDI GPU devices discovered by Docker."""
+    coresys.docker._info = replace(
+        coresys.docker.info, cdi_devices=frozenset(cdi_devices)
+    )
+    install_app_ssh.data["gpu"] = gpu
+    docker_app = DockerApp(coresys, install_app_ssh)
+
+    assert docker_app.device_requests == expected
+
+    with (
+        patch.object(DockerAPI, "run", return_value=MagicMock()) as run,
+        patch.object(DockerApp, "is_running", return_value=False),
+        patch.object(DockerApp, "stop"),
+    ):
+        await docker_app.run()
+
+    assert run.call_args.kwargs["device_requests"] == expected
+
+
+@pytest.mark.usefixtures("path_extern", "tmp_supervisor_data")
+async def test_app_gpu_cgroups(coresys: CoreSys, install_app_ssh: App):
+    """Test GPU apps get access to DRM and KFD devices."""
+    coresys.hardware.update_device(
+        Device(
+            "kfd",
+            Path("/dev/kfd"),
+            Path("/sys/devices/virtual/kfd/kfd"),
+            "kfd",
+            None,
+            [],
+            {"MAJOR": "510", "MINOR": "0"},
+            [],
+        )
+    )
+    docker_app = DockerApp(coresys, install_app_ssh)
+
+    install_app_ssh.data["gpu"] = False
+    assert "c 510:* rwm" not in (docker_app.cgroups_rules or [])
+
+    install_app_ssh.data["gpu"] = True
+    assert {"c 226:* rwm", "c 510:* rwm"} <= set(docker_app.cgroups_rules)

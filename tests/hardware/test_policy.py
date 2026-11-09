@@ -197,3 +197,46 @@ def test_dynamic_group_alloc_major(coresys):
         "c 254:* rwm",
         "c 239:* rwm",
     ]
+
+
+def test_policy_group_gpu(coresys):
+    """Test GPU policy group includes DRM and dynamic KFD/accel majors."""
+    for device in (
+        Device(
+            "kfd",
+            Path("/dev/kfd"),
+            Path("/sys/devices/virtual/kfd/kfd"),
+            "kfd",
+            None,
+            [],
+            {"MAJOR": "510", "MINOR": "0"},
+            [],
+        ),
+        Device(
+            "accel0",
+            Path("/dev/accel/accel0"),
+            Path("/sys/devices/pci0000:00/0000:00:0b.0/accel/accel0"),
+            "accel",
+            None,
+            [],
+            {"MAJOR": "261", "MINOR": "0"},
+            [],
+        ),
+        Device(
+            "renderD128",
+            Path("/dev/dri/renderD128"),
+            Path("/sys/devices/pci0000:00/0000:03:00.0/drm/renderD128"),
+            "drm",
+            None,
+            [],
+            {"MAJOR": "226", "MINOR": "128"},
+            [],
+        ),
+    ):
+        coresys.hardware.update_device(device)
+
+    assert sorted(coresys.hardware.policy.get_cgroups_rules(PolicyGroup.GPU)) == [
+        "c 226:* rwm",
+        "c 261:* rwm",
+        "c 510:* rwm",
+    ]

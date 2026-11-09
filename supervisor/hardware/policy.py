@@ -25,6 +25,9 @@ _CGROUPS: dict[PolicyGroup, list[int]] = {
         81,
         226
     ],
+    PolicyGroup.GPU: [
+        226   # /dev/dri (drm)
+    ],
     PolicyGroup.AUDIO: [
         116   # /dev/snd (sound)
     ],
@@ -51,6 +54,10 @@ _CGROUPS_DYNAMIC_MAJOR: dict[PolicyGroup, list[UdevSubsystem]] = {
         UdevSubsystem.CEC,
         UdevSubsystem.RPI_H264MEM,
         UdevSubsystem.RPI_HEVCMEM
+    ],
+    PolicyGroup.GPU: [
+        UdevSubsystem.KFD,    # /dev/kfd (AMD ROCm/HIP)
+        UdevSubsystem.ACCEL   # /dev/accel (compute accelerators, e.g. Intel NPU)
     ]
 }
 

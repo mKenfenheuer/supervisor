@@ -170,6 +170,9 @@ ENV_TOKEN_OLD = "HASSIO_TOKEN"
 
 LABEL_MANAGED = "supervisor_managed"
 
+# CDI devices requested for apps with GPU access, if the host provides them
+CDI_GPU_DEVICES = ("nvidia.com/gpu=all", "amd.com/gpu=all")
+
 MOUNT_DBUS = DockerMount(
     type=MountType.BIND, source="/run/dbus", target="/run/dbus", read_only=True
 )
