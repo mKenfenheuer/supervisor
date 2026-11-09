@@ -3,6 +3,8 @@
 from pathlib import Path
 
 from aiohttp.test_utils import TestClient
+from dbus_fast.aio.message_bus import MessageBus
+import pytest
 
 from supervisor.coresys import CoreSys
 from supervisor.hardware.data import Device
@@ -67,3 +69,59 @@ async def test_api_hardware_info_drives(
         },
         "Generic-Flash-Disk-61BCDDB6": {"by-uuid-2802-1EDE"},
     }
+
+
+@pytest.mark.parametrize("os_agent_version", ["1.15.0"], indirect=True)
+@pytest.mark.usefixtures("os_agent_version")
+async def test_api_hardware_gpu(
+    api_client_with_prefix: tuple[TestClient, str],
+    coresys: CoreSys,
+    dbus_session_bus: MessageBus,
+):
+    """Test GPU api returns devices with statistics."""
+    await coresys.dbus.agent.connect(dbus_session_bus)
+    api_client, prefix = api_client_with_prefix
+
+    resp = await api_client.get(f"{prefix}/hardware/gpu")
+    result = await resp.json()
+
+    assert result["result"] == "ok"
+    assert result["data"]["gpus"] == [
+        {
+            "address": "0000:01:00.0",
+            "vendor": "nvidia",
+            "name": "NVIDIA GeForce RTX 3090",
+            "driver": "nvidia",
+            "driver_version": "615.78.08",
+            "utilization": 7.0,
+            "memory_used": 2982150144,
+            "memory_total": 25769803776,
+            "temperature": 34.0,
+            "power": 16.37,
+        },
+        {
+            "address": "0000:00:02.0",
+            "vendor": "intel",
+            "name": "Intel GPU [8086:46a6]",
+            "driver": "i915",
+            "driver_version": "6.18.60-haos",
+            "utilization": None,
+            "memory_used": None,
+            "memory_total": None,
+            "temperature": None,
+            "power": None,
+        },
+    ]
+
+
+async def test_api_hardware_gpu_no_os_agent_support(
+    api_client_with_prefix: tuple[TestClient, str],
+):
+    """Test GPU api is empty without GPU support in OS Agent."""
+    api_client, prefix = api_client_with_prefix
+
+    resp = await api_client.get(f"{prefix}/hardware/gpu")
+    result = await resp.json()
+
+    assert result["result"] == "ok"
+    assert result["data"]["gpus"] == []
