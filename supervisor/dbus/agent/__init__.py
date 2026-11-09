@@ -22,11 +22,14 @@ from .apparmor import AppArmor
 from .boards import BoardManager
 from .cgroup import CGroup
 from .datadisk import DataDisk
+from .gpu import GPU
 from .swap import Swap
 from .system import System
 from .timesyncd import Timesyncd
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
+
+OS_AGENT_GPU_MIN_VERSION = AwesomeVersion("1.15.0")
 
 
 class OSAgent(DBusInterfaceProxy):
@@ -45,6 +48,7 @@ class OSAgent(DBusInterfaceProxy):
         self._board: BoardManager = BoardManager()
         self._cgroup: CGroup = CGroup()
         self._datadisk: DataDisk = DataDisk()
+        self._gpu: GPU = GPU()
         self._swap: Swap = Swap()
         self._system: System = System()
         self._timesyncd: Timesyncd = Timesyncd()
@@ -73,6 +77,11 @@ class OSAgent(DBusInterfaceProxy):
     def datadisk(self) -> DataDisk:
         """Return DataDisk DBUS object."""
         return self._datadisk
+
+    @property
+    def gpu(self) -> GPU:
+        """Return GPU DBUS object."""
+        return self._gpu
 
     @property
     def board(self) -> BoardManager:
@@ -104,7 +113,7 @@ class OSAgent(DBusInterfaceProxy):
     @property
     def all(self) -> list[DBusInterface]:
         """Return all managed dbus interfaces."""
-        return [
+        interfaces: list[DBusInterface] = [
             self.apparmor,
             self.board,
             self.cgroup,
@@ -113,6 +122,10 @@ class OSAgent(DBusInterfaceProxy):
             self.system,
             self.timesyncd,
         ]
+        # Older OS Agent releases don't export it, avoid logging an error
+        if self.is_connected and self.version >= OS_AGENT_GPU_MIN_VERSION:
+            interfaces.append(self.gpu)
+        return interfaces
 
     async def connect(self, bus: MessageBus) -> None:
         """Connect to system's D-Bus."""
