@@ -12,6 +12,7 @@ import voluptuous as vol
 
 from ..const import (
     ATTR_ACTIVITY_LED,
+    ATTR_AVAILABLE,
     ATTR_BLOCKED_REASON,
     ATTR_BOARD,
     ATTR_BOOT,
@@ -20,6 +21,7 @@ from ..const import (
     ATTR_DISK_LED,
     ATTR_HEARTBEAT_LED,
     ATTR_ID,
+    ATTR_INSTALLED,
     ATTR_LATEST_VERSION,
     ATTR_NAME,
     ATTR_POWER_LED,
@@ -38,6 +40,7 @@ from ..const import (
 from ..coresys import CoreSysAttributes
 from ..exceptions import APIError, APINotFound, BoardInvalidError
 from ..homeassistant.const import LANDINGPAGE
+from ..os.const import OSExtension
 from ..resolution.const import ContextType, IssueType, SuggestionType
 from ..resolution.data import Issue
 from ..utils import version_is_new_enough
@@ -79,6 +82,7 @@ SSH_KEYS_LIST_MIN_OS_AGENT_VERSION: AwesomeVersion = AwesomeVersion("1.11.0")
 SCHEMA_VERSION = vol.Schema({vol.Optional(ATTR_VERSION): version_tag})
 SCHEMA_SET_BOOT_SLOT = vol.Schema({vol.Required(ATTR_BOOT_SLOT): vol.Coerce(BootSlot)})
 SCHEMA_DISK = vol.Schema({vol.Required(ATTR_DEVICE): str})
+SCHEMA_EXTENSION = vol.Schema({vol.Required(ATTR_NAME): vol.Coerce(OSExtension)})
 
 SCHEMA_YELLOW_OPTIONS = vol.Schema(
     {
@@ -233,6 +237,26 @@ class APIOS(CoreSysAttributes):
     def ssh_authorized_keys_clear(self, request: web.Request) -> Awaitable[None]:
         """Remove all SSH authorized keys of root on the host."""
         return asyncio.shield(self.sys_os.clear_ssh_authorized_keys())
+
+    @api_process
+    async def extensions_info(self, request: web.Request) -> dict[str, Any]:
+        """Return installed and available OS extensions."""
+        return {
+            ATTR_INSTALLED: await self.sys_os.extensions.installed(),
+            ATTR_AVAILABLE: self.sys_os.extensions.available,
+        }
+
+    @api_process
+    async def extensions_install(self, request: web.Request) -> None:
+        """Install an OS extension for the OS version booted next."""
+        body = await api_validate(SCHEMA_EXTENSION, request)
+        await asyncio.shield(self.sys_os.extensions.install(body[ATTR_NAME]))
+
+    @api_process
+    async def extensions_remove(self, request: web.Request) -> None:
+        """Remove an installed OS extension."""
+        body = await api_validate(SCHEMA_EXTENSION, request)
+        await asyncio.shield(self.sys_os.extensions.remove(body[ATTR_NAME]))
 
     @api_process
     async def list_data(self, request: web.Request) -> dict[str, Any]:

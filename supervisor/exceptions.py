@@ -422,6 +422,36 @@ class HassOSJobError(HassOSError, JobException):
     """Function not supported by HassOS."""
 
 
+class HassOSExtensionError(HassOSError):
+    """Error on managing an OS extension."""
+
+
+class HassOSExtensionsNotSupportedError(
+    HassOSExtensionError, HassioNotSupportedError, APIError
+):
+    """Raise when OS extensions are used without Home Assistant OS."""
+
+    error_key = "hassos_extensions_not_supported_error"
+    message_template = "OS extensions are only supported on Home Assistant OS"
+
+    def __init__(self, logger: Callable[..., None] | None = None) -> None:
+        """Initialize exception."""
+        super().__init__(None, logger)
+
+
+class HassOSExtensionBusyError(HassOSExtensionError, APIError):
+    """Raise when OS extensions are changed while another change is running."""
+
+    error_key = "hassos_extension_busy_error"
+    message_template = (
+        "Another OS extension change or an OS update is in progress, try again later"
+    )
+
+    def __init__(self, logger: Callable[..., None] | None = None) -> None:
+        """Initialize exception."""
+        super().__init__(None, logger)
+
+
 class HassOSDataDiskError(HassOSError):
     """Issues with the DataDisk feature from HAOS."""
 

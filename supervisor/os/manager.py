@@ -17,6 +17,7 @@ from ..exceptions import (
     DBusError,
     DBusNotConnectedError,
     HassOSError,
+    HassOSExtensionError,
     HassOSJobError,
     HassOSSlotNotFound,
     HassOSSlotUpdateError,
@@ -29,7 +30,9 @@ from ..jobs.const import JobConcurrency, JobCondition
 from ..jobs.decorator import Job
 from ..jobs.job_group import JobGroup
 from ..resolution.const import ContextType, IssueType, SuggestionType
+from .const import OSExtension
 from .data_disk import DataDisk
+from .extensions import OSExtensions
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
 
@@ -103,6 +106,7 @@ class OSManager(JobGroup):
         """Initialize HassOS handler."""
         super().__init__(coresys, "os_manager")
         self._datadisk: DataDisk = DataDisk(coresys)
+        self._extensions: OSExtensions = OSExtensions(coresys)
         self._available: bool = False
         self._version: AwesomeVersion | None = None
         self._version_pending: AwesomeVersion | None = None
@@ -167,6 +171,11 @@ class OSManager(JobGroup):
         return self._datadisk
 
     @property
+    def extensions(self) -> OSExtensions:
+        """Return OS system extensions."""
+        return self._extensions
+
+    @property
     def slots(self) -> list[SlotStatus]:
         """Return status of slots."""
         if not self._slots:
@@ -205,44 +214,62 @@ class OSManager(JobGroup):
             version=str(version), board=update_board, os_name=update_os_name
         )
 
+    def get_extension_download_url(
+        self, name: OSExtension, version: AwesomeVersion
+    ) -> str:
+        """Return URL of an extension image published next to the OTA bundle."""
+        bundle_url = self._get_download_url(version)
+        if not bundle_url.endswith(".raucb"):
+            raise HassOSExtensionError(
+                f"Can't derive OS extension URL from OTA URL {bundle_url}",
+                _LOGGER.error,
+            )
+        return f"{bundle_url.removesuffix('.raucb')}.{name}.raw"
+
     async def _download_raucb(self, url: str, raucb: Path) -> None:
         """Download rauc bundle (OTA) from URL."""
-        _LOGGER.info("Fetch OTA update from %s", url)
+        await self.download_file(
+            url, raucb, label="OTA update", error=HassOSUpdateError
+        )
+
+    async def download_file(
+        self, url: str, target: Path, *, label: str, error: type[HassOSError]
+    ) -> None:
+        """Download an OS release artifact from URL to target."""
+        _LOGGER.info("Fetch %s from %s", label, url)
         try:
             timeout = aiohttp.ClientTimeout(total=60 * 60, connect=180)
             async with self.sys_websession.get(url, timeout=timeout) as request:
                 if request.status != 200:
-                    raise HassOSUpdateError(
-                        f"Error raised from OTA Webserver: {request.status}",
+                    raise error(
+                        f"Error raised from OS release webserver for {label}: "
+                        f"{request.status}",
                         _LOGGER.error,
                     )
 
-                # Download RAUCB file
-                ota_file = await self.sys_run_in_executor(raucb.open, "wb")
+                file = await self.sys_run_in_executor(target.open, "wb")
                 try:
                     while True:
                         chunk = await request.content.read(1_048_576)
                         if not chunk:
                             break
-                        await self.sys_run_in_executor(ota_file.write, chunk)
+                        await self.sys_run_in_executor(file.write, chunk)
                 finally:
-                    await self.sys_run_in_executor(ota_file.close)
+                    await self.sys_run_in_executor(file.close)
 
-            _LOGGER.info("Completed download of OTA update file %s", raucb)
+            _LOGGER.info("Completed download of %s file %s", label, target)
 
         except (aiohttp.ClientError, TimeoutError) as err:
             # Nudge a fresh connectivity check; the probe is authoritative,
             # this error path only hints that something may be wrong.
             self.sys_supervisor.request_connectivity_check()
-            raise HassOSUpdateError(
-                f"Can't fetch OTA update from {url}: {err!s}", _LOGGER.error
+            raise error(
+                f"Can't fetch {label} from {url}: {err!s}", _LOGGER.error
             ) from err
 
         except OSError as err:
             self.sys_resolution.check_oserror(err)
-            raise HassOSUpdateError(
-                f"Can't write OTA file: {err!s}", _LOGGER.error
-            ) from err
+            raise error(f"Can't write {label} file: {err!s}", _LOGGER.error) from err
 
     @Job(name="os_manager_reload", conditions=[JobCondition.HAOS], internal=True)
     async def reload(self) -> None:
@@ -277,6 +304,7 @@ class OSManager(JobGroup):
         await self.reload()
 
         await self.datadisk.load()
+        await self.extensions.load()
 
         _LOGGER.info(
             "Detect Home Assistant Operating System %s / BootSlot %s",
@@ -383,12 +411,18 @@ class OSManager(JobGroup):
 
         try:
             await self._download_raucb(ota_url, int_ota)
-            async with self.sys_dbus.rauc.signal_completed() as signal:
-                # Start listening for signals before triggering install
-                # This prevents a race condition with install complete signal
+            async with self.extensions.prepare_update(version) as extensions:
+                async with self.sys_dbus.rauc.signal_completed() as signal:
+                    # Start listening for signals before triggering install
+                    # This prevents a race condition with install complete signal
 
-                await self.sys_dbus.rauc.install(ext_ota)
-                completed = await signal.wait_for_signal()
+                    await self.sys_dbus.rauc.install(ext_ota)
+                    completed = await signal.wait_for_signal()
+
+                # The running OS ignores images for the new version, so they
+                # can replace the old ones before the reboot
+                if 0 in completed:
+                    await self.extensions.commit_update(extensions)
 
         except DBusError as err:
             raise HassOSUpdateError("Rauc communication error", _LOGGER.error) from err

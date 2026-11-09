@@ -59,6 +59,7 @@ MOUNTS_DEVICES = PurePath(".mounts_devices")
 APP_CONFIGS = PurePath("app_configs")
 CORE_BACKUP_DATA = PurePath("core/backup")
 CID_FILES = PurePath("cid_files")
+OS_EXTENSIONS = PurePath("extensions")
 
 RUN_SUPERVISOR = PurePath("supervisor")
 RUN_CORE = PurePath("core")
@@ -427,6 +428,11 @@ class CoreConfig(FileConfiguration):
     def path_extern_cid_files(self) -> PurePath:
         """Return CID files folder."""
         return PurePath(self.path_extern_supervisor, CID_FILES)
+
+    @property
+    def path_os_extensions(self) -> Path:
+        """Return folder for system extension images merged by the OS at boot."""
+        return self.path_supervisor / OS_EXTENSIONS
 
     @property
     def path_run(self) -> Path:
