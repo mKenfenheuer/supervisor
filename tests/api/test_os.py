@@ -13,6 +13,7 @@ from supervisor.dbus.agent.boards import BoardManager
 from supervisor.dbus.agent.boards.interface import BoardProxy
 from supervisor.exceptions import DBusError as SupervisorDBusError, HostError
 from supervisor.host.control import SystemControl
+from supervisor.os.const import OSExtension
 from supervisor.os.manager import OSManager
 from supervisor.resolution.const import ContextType, IssueType, SuggestionType
 from supervisor.resolution.data import Issue, Suggestion
@@ -1125,3 +1126,76 @@ async def test_api_os_ssh_authorized_keys_no_os(
     assert resp.status == 400
     result = await resp.json()
     assert "no Home Assistant OS available" in result["message"]
+
+
+@pytest.mark.usefixtures("tmp_supervisor_data", "os_available")
+async def test_api_os_extensions_info(
+    api_client_with_prefix: tuple[TestClient, str], coresys: CoreSys
+) -> None:
+    """Test listing installed and available OS extensions."""
+    api_client, prefix = api_client_with_prefix
+    coresys.config.path_os_extensions.mkdir()
+    (coresys.config.path_os_extensions / "nvidia.raw").touch()
+
+    resp = await api_client.get(f"{prefix}/os/extensions")
+
+    assert resp.status == 200
+    assert (await resp.json())["data"] == {
+        "installed": ["nvidia"],
+        "available": ["nvidia", "nvidia-legacy"],
+    }
+
+
+@pytest.mark.parametrize("action", ["install", "remove"])
+@pytest.mark.usefixtures("os_available")
+async def test_api_os_extensions_invalid_name(
+    api_client_with_prefix: tuple[TestClient, str], coresys: CoreSys, action: str
+) -> None:
+    """Test unknown OS extensions are rejected."""
+    api_client, prefix = api_client_with_prefix
+
+    with patch.object(coresys.os.extensions, action) as change:
+        resp = await api_client.post(
+            f"{prefix}/os/extensions/{action}", json={"name": "../evil"}
+        )
+
+    assert resp.status == 400
+    change.assert_not_called()
+
+
+@pytest.mark.parametrize("action", ["install", "remove"])
+@pytest.mark.usefixtures("os_available")
+async def test_api_os_extensions_change(
+    api_client_with_prefix: tuple[TestClient, str], coresys: CoreSys, action: str
+) -> None:
+    """Test install and remove pass the extension to the OS manager."""
+    api_client, prefix = api_client_with_prefix
+
+    with patch.object(coresys.os.extensions, action) as change:
+        resp = await api_client.post(
+            f"{prefix}/os/extensions/{action}", json={"name": "nvidia-legacy"}
+        )
+
+    assert resp.status == 200
+    change.assert_called_once_with(OSExtension.NVIDIA_LEGACY)
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        pytest.param("get", "/os/extensions", id="info"),
+        pytest.param("post", "/os/extensions/install", id="install"),
+        pytest.param("post", "/os/extensions/remove", id="remove"),
+    ],
+)
+@pytest.mark.usefixtures("tmp_supervisor_data", "supervisor_internet")
+async def test_api_os_extensions_not_os(
+    api_client_with_prefix: tuple[TestClient, str], method: str, path: str
+) -> None:
+    """Test OS extension endpoints return not supported without HAOS."""
+    api_client, prefix = api_client_with_prefix
+
+    resp = await getattr(api_client, method)(f"{prefix}{path}", json={"name": "nvidia"})
+
+    assert resp.status == 400
+    assert (await resp.json())["error_key"] == "hassos_extensions_not_supported_error"
