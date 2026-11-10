@@ -31,6 +31,8 @@ from ..const import (
     ATTR_UPDATE_AVAILABLE,
     ATTR_UPDATE_BLOCKED,
     ATTR_UPDATE_PENDING,
+    ATTR_VARIANT,
+    ATTR_VARIANTS,
     ATTR_VERSION,
     ATTR_VERSION_LATEST,
     ATTR_VERSION_PENDING,
@@ -41,6 +43,7 @@ from ..homeassistant.const import LANDINGPAGE
 from ..resolution.const import ContextType, IssueType, SuggestionType
 from ..resolution.data import Issue
 from ..utils import version_is_new_enough
+from ..utils.sentinel import DEFAULT
 from ..validate import version_tag
 from .const import (
     ATTR_BOOT_SLOT,
@@ -76,7 +79,13 @@ CORE_VERSION_PENDING_MIN_VERSION: AwesomeVersion = AwesomeVersion(
 SSH_KEYS_LIST_MIN_OS_AGENT_VERSION: AwesomeVersion = AwesomeVersion("1.11.0")
 
 # pylint: disable=no-value-for-parameter
-SCHEMA_VERSION = vol.Schema({vol.Optional(ATTR_VERSION): version_tag})
+SCHEMA_UPDATE = vol.Schema(
+    {
+        vol.Optional(ATTR_VERSION): version_tag,
+        # None switches back to the plain OS
+        vol.Optional(ATTR_VARIANT): vol.Maybe(str),
+    }
+)
 SCHEMA_SET_BOOT_SLOT = vol.Schema({vol.Required(ATTR_BOOT_SLOT): vol.Coerce(BootSlot)})
 SCHEMA_DISK = vol.Schema({vol.Required(ATTR_DEVICE): str})
 
@@ -164,6 +173,8 @@ class APIOS(CoreSysAttributes):
             ATTR_VERSION_PENDING: self.sys_os.version_pending,
             ATTR_UPDATE_AVAILABLE: self.sys_os.need_update,
             ATTR_BOARD: self.sys_os.board,
+            ATTR_VARIANT: self.sys_os.variant,
+            ATTR_VARIANTS: list(self.sys_os.variants),
             ATTR_BOOT: self.sys_dbus.rauc.boot_slot,
             ATTR_DATA_DISK: self.sys_os.datadisk.disk_used_id,
             ATTR_BOOT_SLOTS: {
@@ -180,10 +191,12 @@ class APIOS(CoreSysAttributes):
     @api_process
     async def update(self, request: web.Request) -> None:
         """Update OS."""
-        body = await api_validate(SCHEMA_VERSION, request)
+        body = await api_validate(SCHEMA_UPDATE, request)
         version = body.get(ATTR_VERSION, self.sys_os.latest_version)
 
-        await asyncio.shield(self.sys_os.update(version))
+        await asyncio.shield(
+            self.sys_os.update(version, body.get(ATTR_VARIANT, DEFAULT))
+        )
 
     @api_process
     def config_sync(self, request: web.Request) -> Awaitable[None]:

@@ -51,6 +51,8 @@ async def test_api_os_info(api_client_with_prefix: tuple[TestClient, str]):
         "version_pending",
         "update_available",
         "board",
+        "variant",
+        "variants",
         "boot",
         "data_disk",
         "boot_slots",

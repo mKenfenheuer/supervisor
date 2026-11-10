@@ -23,12 +23,15 @@ from ..exceptions import (
     HassOSUpdateAlreadyInstalledError,
     HassOSUpdateError,
     HassOSUpdatePendingRebootError,
+    HassOSVariantNotAvailableError,
     HostError,
 )
 from ..jobs.const import JobConcurrency, JobCondition
 from ..jobs.decorator import Job
 from ..jobs.job_group import JobGroup
 from ..resolution.const import ContextType, IssueType, SuggestionType
+from ..utils.sentinel import DEFAULT
+from .const import OS_VARIANTS
 from .data_disk import DataDisk
 
 _LOGGER: logging.Logger = logging.getLogger(__name__)
@@ -108,6 +111,7 @@ class OSManager(JobGroup):
         self._version_pending: AwesomeVersion | None = None
         self._board: str | None = None
         self._os_name: str | None = None
+        self._variant: str | None = None
         self._slots: dict[str, SlotStatus] | None = None
 
     @property
@@ -157,6 +161,35 @@ class OSManager(JobGroup):
         return self._board
 
     @property
+    def variants(self) -> tuple[str, ...]:
+        """Return the OS variants available for the board."""
+        return OS_VARIANTS.get(self.board or "", ())
+
+    @property
+    def variant(self) -> str | None:
+        """Return OS variant of the running version, None for the plain OS."""
+        return self._variant
+
+    def _variant_of(self, version: AwesomeVersion | None) -> str | None:
+        """Return OS variant installed for a version. Must run in executor.
+
+        The update bundle of a variant places its system extension in the
+        extensions folder of its version.
+        """
+        if version is None:
+            return None
+        try:
+            images = sorted(
+                image.stem
+                for image in (self.sys_config.path_os_extensions / str(version)).glob(
+                    "*.raw"
+                )
+            )
+        except OSError:
+            return None
+        return next((image for image in images if image in self.variants), None)
+
+    @property
     def os_name(self) -> str | None:
         """Return OS name."""
         return self._os_name
@@ -183,7 +216,9 @@ class OSManager(JobGroup):
                 return name
         raise HassOSSlotNotFound
 
-    def _get_download_url(self, version: AwesomeVersion) -> str:
+    def _get_download_url(
+        self, version: AwesomeVersion, variant: str | None = None
+    ) -> str:
         raw_url = self.sys_updater.ota_url
         if raw_url is None:
             raise HassOSUpdateError("Don't have an URL for OTA updates!", _LOGGER.error)
@@ -200,6 +235,10 @@ class OSManager(JobGroup):
             update_os_name = "hassos"
         else:
             update_os_name = "haos"
+
+        # The bundle of an OS variant is named like a board: <board>-<variant>
+        if variant:
+            update_board = f"{update_board}-{variant}"
 
         return raw_url.format(
             version=str(version), board=update_board, os_name=update_os_name
@@ -273,14 +312,16 @@ class OSManager(JobGroup):
         self._version = AwesomeVersion(cpe.get_version()[0])
         self._board = cpe.get_target_hardware()[0]
         self._os_name = cpe.get_product()[0]
+        self._variant = await self.sys_run_in_executor(self._variant_of, self._version)
 
         await self.reload()
 
         await self.datadisk.load()
 
         _LOGGER.info(
-            "Detect Home Assistant Operating System %s / BootSlot %s",
+            "Detect Home Assistant Operating System %s%s / BootSlot %s",
             self.version,
+            f" ({self.variant})" if self.variant else "",
             self.sys_dbus.rauc.boot_slot,
         )
 
@@ -360,24 +401,43 @@ class OSManager(JobGroup):
         on_condition=HassOSJobError,
         concurrency=JobConcurrency.REJECT,
     )
-    async def update(self, version: AwesomeVersion | None = None) -> None:
-        """Update HassOS system."""
+    async def update(
+        self,
+        version: AwesomeVersion | None = None,
+        variant: str | None | type[DEFAULT] = DEFAULT,
+    ) -> None:
+        """Update HassOS system.
+
+        Without a variant the update keeps the running OS variant. A variant
+        (or None for the plain OS) switches to it, also for the running version.
+        """
         version = version or self.latest_version
+        if variant is DEFAULT:
+            variant = self.variant
+        elif variant is not None and variant not in self.variants:
+            raise HassOSVariantNotAvailableError(
+                _LOGGER.error, variant=variant, board=str(self.board)
+            )
 
         # Check installed version
         if not version:
             raise HassOSUpdateError(
                 "No version information available, cannot update", _LOGGER.error
             )
-        if version == self.version:
+        if version == self.version and variant == self.variant:
             raise HassOSUpdateAlreadyInstalledError(
                 _LOGGER.warning, version=str(version)
             )
-        if self.version_pending is not None and version == self.version_pending:
+        if (
+            self.version_pending is not None
+            and version == self.version_pending
+            and variant
+            == await self.sys_run_in_executor(self._variant_of, self.version_pending)
+        ):
             raise HassOSUpdatePendingRebootError(_LOGGER.warning, version=str(version))
 
         # Fetch files from internet
-        ota_url = self._get_download_url(version)
+        ota_url = self._get_download_url(version, variant)
         int_ota = Path(self.sys_config.path_tmp, f"hassos-{version!s}.raucb")
         ext_ota = Path(self.sys_config.path_extern_tmp, int_ota.name)
 
@@ -400,8 +460,9 @@ class OSManager(JobGroup):
         # Update success
         if 0 in completed:
             _LOGGER.info(
-                "Install of Home Assistant Operating System %s success; reboot required",
+                "Install of Home Assistant Operating System %s%s success; reboot required",
                 version,
+                f" ({variant})" if variant else "",
             )
             self._version_pending = version
             self.sys_resolution.create_issue(
