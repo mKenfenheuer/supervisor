@@ -6,6 +6,7 @@ from typing import Any
 from aiohttp import web
 
 from ..const import (
+    ATTR_ADDRESS,
     ATTR_AUDIO,
     ATTR_DEVICES,
     ATTR_ID,
@@ -17,6 +18,7 @@ from ..const import (
     ATTR_SYSTEM,
 )
 from ..coresys import CoreSysAttributes
+from ..dbus.agent.gpu import GPUDevice
 from ..dbus.udisks2 import UDisks2Manager
 from ..dbus.udisks2.block import UDisks2Block
 from ..dbus.udisks2.drive import UDisks2Drive
@@ -28,17 +30,25 @@ from .const import (
     ATTR_CONNECTION_BUS,
     ATTR_DEV_PATH,
     ATTR_DEVICE,
+    ATTR_DRIVER,
+    ATTR_DRIVER_VERSION,
     ATTR_DRIVES,
     ATTR_EJECTABLE,
     ATTR_FILESYSTEMS,
+    ATTR_GPUS,
+    ATTR_MEMORY_TOTAL,
+    ATTR_MEMORY_USED,
     ATTR_MODEL,
     ATTR_MOUNT_POINTS,
+    ATTR_POWER,
     ATTR_REMOVABLE,
     ATTR_REVISION,
     ATTR_SEAT,
     ATTR_SUBSYSTEM,
     ATTR_SYSFS,
+    ATTR_TEMPERATURE,
     ATTR_TIME_DETECTED,
+    ATTR_UTILIZATION,
     ATTR_VENDOR,
 )
 from .utils import api_process
@@ -98,6 +108,22 @@ def drive_struct(udisks2: UDisks2Manager, drive: UDisks2Drive) -> dict[str, Any]
     }
 
 
+def gpu_struct(gpu: GPUDevice) -> dict[str, Any]:
+    """Return a dict with information and statistics of a GPU for the API."""
+    return {
+        ATTR_ADDRESS: gpu.address,
+        ATTR_VENDOR: gpu.vendor,
+        ATTR_NAME: gpu.name,
+        ATTR_DRIVER: gpu.driver,
+        ATTR_DRIVER_VERSION: gpu.driver_version,
+        ATTR_UTILIZATION: gpu.utilization,
+        ATTR_MEMORY_USED: gpu.memory_used,
+        ATTR_MEMORY_TOTAL: gpu.memory_total,
+        ATTR_TEMPERATURE: gpu.temperature,
+        ATTR_POWER: gpu.power,
+    }
+
+
 class APIHardware(CoreSysAttributes):
     """Handle RESTful API for hardware functions."""
 
@@ -128,4 +154,16 @@ class APIHardware(CoreSysAttributes):
                     for profile in self.sys_host.sound.outputs
                 },
             }
+        }
+
+    @api_process
+    async def gpu(self, request: web.Request) -> dict[str, Any]:
+        """Show GPUs of the host with current statistics."""
+        if not self.sys_dbus.agent.gpu.is_connected:
+            return {ATTR_GPUS: []}
+
+        return {
+            ATTR_GPUS: [
+                gpu_struct(gpu) for gpu in await self.sys_dbus.agent.gpu.get_devices()
+            ]
         }

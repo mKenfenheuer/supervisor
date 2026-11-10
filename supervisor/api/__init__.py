@@ -487,6 +487,7 @@ class RestAPI(CoreSysAttributes):
             [
                 web.get("/hardware/info", api_hardware.info),
                 web.get("/hardware/audio", api_hardware.audio),
+                web.get("/hardware/gpu", api_hardware.gpu),
             ]
         )
 

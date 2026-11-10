@@ -550,6 +550,7 @@ async def fixture_os_agent_services(
             "agent_apparmor": None,
             "agent_cgroup": None,
             "agent_datadisk": None,
+            "agent_gpu": None,
             "agent_swap": None,
             "agent_system": None,
             "agent_timesyncd": None,
