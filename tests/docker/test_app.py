@@ -29,6 +29,8 @@ from supervisor.docker.const import (
 from supervisor.docker.manager import DockerAPI
 from supervisor.exceptions import (
     CoreDNSError,
+    DockerAPIError,
+    DockerContainerPortConflict,
     DockerError,
     DockerNotFound,
     DockerTimeoutError,
@@ -1233,3 +1235,132 @@ async def test_app_run_drops_net_raw_with_feature_flag(
 
     assert run.call_args.kwargs["cap_add"] is None
     assert run.call_args.kwargs["cap_drop"] == [Capabilities.NET_RAW]
+
+
+@pytest.mark.usefixtures("path_extern", "tmp_supervisor_data")
+@pytest.mark.parametrize(
+    ("video", "cdi_devices", "expected"),
+    [
+        pytest.param(False, {"nvidia.com/gpu=all"}, None, id="video-disabled"),
+        pytest.param(True, set(), None, id="no-cdi-devices"),
+        pytest.param(True, {"vendor.com/other=all"}, None, id="unrelated-cdi-device"),
+        pytest.param(
+            True,
+            {"nvidia.com/gpu=0", "nvidia.com/gpu=all"},
+            [{"Driver": "cdi", "DeviceIDs": ["nvidia.com/gpu=all"]}],
+            id="nvidia",
+        ),
+        pytest.param(
+            True,
+            {"nvidia.com/gpu=all", "amd.com/gpu=all"},
+            [
+                {
+                    "Driver": "cdi",
+                    "DeviceIDs": ["nvidia.com/gpu=all", "amd.com/gpu=all"],
+                }
+            ],
+            id="nvidia-and-amd",
+        ),
+    ],
+)
+async def test_app_video_device_requests(
+    coresys: CoreSys,
+    install_app_ssh: App,
+    video: bool,
+    cdi_devices: set[str],
+    expected: list[dict[str, Any]] | None,
+):
+    """Test video apps request the CDI GPU devices discovered by Docker."""
+    coresys.docker._info = replace(
+        coresys.docker.info, cdi_devices=frozenset(cdi_devices)
+    )
+    install_app_ssh.data["video"] = video
+    docker_app = DockerApp(coresys, install_app_ssh)
+
+    assert docker_app.device_requests == expected
+
+    with (
+        patch.object(DockerAPI, "run", return_value=MagicMock()) as run,
+        patch.object(DockerApp, "is_running", return_value=False),
+        patch.object(DockerApp, "stop"),
+    ):
+        await docker_app.run()
+
+    assert run.call_args.kwargs.get("device_requests") == expected
+
+
+@pytest.mark.usefixtures("path_extern", "tmp_supervisor_data")
+async def test_app_video_gpu_cgroups(coresys: CoreSys, install_app_ssh: App):
+    """Test video apps get access to DRM and KFD devices."""
+    coresys.hardware.update_device(
+        Device(
+            "kfd",
+            Path("/dev/kfd"),
+            Path("/sys/devices/virtual/kfd/kfd"),
+            "kfd",
+            None,
+            [],
+            {"MAJOR": "510", "MINOR": "0"},
+            [],
+        )
+    )
+    docker_app = DockerApp(coresys, install_app_ssh)
+
+    install_app_ssh.data["video"] = False
+    assert "c 510:* rwm" not in (docker_app.cgroups_rules or [])
+
+    install_app_ssh.data["video"] = True
+    assert {"c 226:* rwm", "c 510:* rwm"} <= set(docker_app.cgroups_rules)
+
+
+@pytest.mark.usefixtures("path_extern", "tmp_supervisor_data")
+async def test_app_video_cdi_fallback(coresys: CoreSys, install_app_ssh: App):
+    """Test a video app starts without the CDI devices if Docker can't inject them."""
+    coresys.docker._info = replace(
+        coresys.docker.info, cdi_devices=frozenset({"nvidia.com/gpu=all"})
+    )
+    install_app_ssh.data["video"] = True
+    docker_app = DockerApp(coresys, install_app_ssh)
+
+    with (
+        patch.object(
+            DockerAPI,
+            "run",
+            side_effect=[DockerAPIError("CDI injection failed"), MagicMock()],
+        ) as run,
+        patch.object(DockerApp, "is_running", return_value=False),
+        patch.object(DockerApp, "stop"),
+    ):
+        await docker_app.run()
+
+    assert run.call_count == 2
+    assert run.call_args_list[0].kwargs["device_requests"] == [
+        {"Driver": "cdi", "DeviceIDs": ["nvidia.com/gpu=all"]}
+    ]
+    assert "device_requests" not in run.call_args_list[1].kwargs
+
+
+@pytest.mark.usefixtures("path_extern", "tmp_supervisor_data")
+async def test_app_video_cdi_no_fallback_on_port_conflict(
+    coresys: CoreSys, install_app_ssh: App
+):
+    """Test a port conflict is not retried without the CDI devices."""
+    coresys.docker._info = replace(
+        coresys.docker.info, cdi_devices=frozenset({"nvidia.com/gpu=all"})
+    )
+    install_app_ssh.data["video"] = True
+    docker_app = DockerApp(coresys, install_app_ssh)
+
+    with (
+        patch.object(
+            DockerAPI,
+            "run",
+            side_effect=DockerContainerPortConflict(name="test", port=8080),
+        ) as run,
+        patch.object(DockerApp, "is_running", return_value=False),
+        patch.object(DockerApp, "stop"),
+        pytest.raises(DockerContainerPortConflict),
+    ):
+        await docker_app.run()
+
+    assert run.call_count == 1

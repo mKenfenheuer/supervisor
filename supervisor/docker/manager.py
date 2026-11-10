@@ -103,6 +103,7 @@ class DockerInfo:
     logging: str
     cgroup: str
     support_cpu_realtime: bool
+    cdi_devices: frozenset[str] = frozenset()
 
     @staticmethod
     async def new(data: Mapping[str, Any]) -> DockerInfo:
@@ -121,6 +122,11 @@ class DockerInfo:
             data.get("LoggingDriver", "unknown"),
             data.get("CgroupVersion", "1"),
             cpu_rt_supported,
+            frozenset(
+                device["ID"]
+                for device in data.get("DiscoveredDevices") or []
+                if device.get("Source") == "cdi" and device.get("ID")
+            ),
         )
 
     @property
@@ -364,6 +370,7 @@ class DockerAPI(CoreSysAttributes):
         network_mode: str | None = None,
         privileged: bool = False,
         device_cgroup_rules: list[str] | None = None,
+        device_requests: list[dict[str, Any]] | None = None,
         tmpfs: dict[str, str] | None = None,
         entrypoint: list[str] | None = None,
         cap_add: list[Capabilities] | None = None,
@@ -401,6 +408,8 @@ class DockerAPI(CoreSysAttributes):
             host_config["OomScoreAdj"] = oom_score_adj
         if device_cgroup_rules:
             host_config["DeviceCgroupRules"] = device_cgroup_rules
+        if device_requests:
+            host_config["DeviceRequests"] = device_requests
         if tmpfs:
             host_config["Tmpfs"] = tmpfs
         if cap_add:

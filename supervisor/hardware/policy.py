@@ -50,7 +50,9 @@ _CGROUPS_DYNAMIC_MAJOR: dict[PolicyGroup, list[UdevSubsystem]] = {
         UdevSubsystem.MEDIA,
         UdevSubsystem.CEC,
         UdevSubsystem.RPI_H264MEM,
-        UdevSubsystem.RPI_HEVCMEM
+        UdevSubsystem.RPI_HEVCMEM,
+        UdevSubsystem.KFD,    # /dev/kfd (AMD ROCm/HIP)
+        UdevSubsystem.ACCEL   # /dev/accel (compute accelerators, e.g. Intel NPU)
     ]
 }
 

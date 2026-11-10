@@ -567,6 +567,26 @@ async def test_info(
     assert docker.info.logging == "example"
     assert docker.info.cgroup == "2"
     assert docker.info.support_cpu_realtime is rt_supported
+    assert docker.info.cdi_devices == frozenset()
+
+
+async def test_info_cdi_devices(docker: DockerAPI):
+    """Test CDI devices discovered by Docker are read from system info."""
+    docker.docker.system.info.return_value = {
+        "ServerVersion": "29.0.0",
+        "Driver": "overlayfs",
+        "LoggingDriver": "journald",
+        "CgroupVersion": "2",
+        "DiscoveredDevices": [
+            {"Source": "cdi", "ID": "nvidia.com/gpu=0"},
+            {"Source": "cdi", "ID": "nvidia.com/gpu=all"},
+            {"Source": "other", "ID": "ignored"},
+        ],
+    }
+    await docker.post_init()
+    assert docker.info.cdi_devices == frozenset(
+        {"nvidia.com/gpu=0", "nvidia.com/gpu=all"}
+    )
 
 
 @pytest.mark.parametrize(

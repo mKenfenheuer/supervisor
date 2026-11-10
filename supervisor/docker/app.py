@@ -34,6 +34,7 @@ from ..coresys import CoreSys
 from ..exceptions import (
     CoreDNSError,
     DBusError,
+    DockerAPIError,
     DockerBuildError,
     DockerError,
     DockerJobError,
@@ -50,6 +51,7 @@ from ..utils.sentinel import DEFAULT
 from ..utils.sentry import async_capture_exception
 from .const import (
     ADDON_BUILDER_IMAGE,
+    CDI_GPU_DEVICES,
     ENV_SUPERVISOR_SOCKET,
     ENV_TIME,
     ENV_TOKEN,
@@ -306,6 +308,26 @@ class DockerApp(DockerInterface):
         if rules:
             return list(rules)
         return None
+
+    @property
+    def device_requests(self) -> list[dict[str, Any]] | None:
+        """Return CDI device requests for app.
+
+        Apps with video access also get the GPUs the host exposes through the
+        Container Device Interface. Docker injects their device nodes and the
+        host driver libraries (e.g. NVIDIA).
+        """
+        if not self.app.with_video:
+            return None
+
+        devices = [
+            device
+            for device in CDI_GPU_DEVICES
+            if device in self.sys_docker.info.cdi_devices
+        ]
+        if not devices:
+            return None
+        return [{"Driver": "cdi", "DeviceIDs": devices}]
 
     @property
     def ports(self) -> dict[str, str | int | None] | None:
@@ -704,6 +726,28 @@ class DockerApp(DockerInterface):
 
         return mounts
 
+    async def _run_with_gpu_fallback(self, run_kwargs: dict[str, Any]) -> None:
+        """Run container, without the CDI GPU devices if Docker can't inject them.
+
+        A broken host GPU driver must not keep an app with video access from
+        starting, so it starts without the GPUs of the driver.
+        """
+        if not (device_requests := self.device_requests):
+            await self._run(**run_kwargs)
+            return
+
+        try:
+            await self._run(**run_kwargs, device_requests=device_requests)
+        except DockerAPIError as err:
+            # Missing images, port conflicts and timeouts are other exceptions
+            _LOGGER.warning(
+                "Can't start %s with the GPU devices of the host driver, starting "
+                "it without them: %s",
+                self.app.name,
+                err,
+            )
+            await self._run(**run_kwargs)
+
     @Job(
         name="docker_app_run",
         on_condition=DockerJobError,
@@ -719,31 +763,33 @@ class DockerApp(DockerInterface):
         # Don't set a hostname if no separate UTS namespace is used
         hostname = None if self.uts_mode else self.app.hostname
 
+        run_kwargs: dict[str, Any] = {
+            "tag": str(self.app.version),
+            "name": self.name,
+            "hostname": hostname,
+            "detach": True,
+            "init": self.app.default_init,
+            "stdin_open": self.app.with_stdin,
+            "network_mode": self.network_mode,
+            "pid_mode": self.pid_mode,
+            "uts_mode": self.uts_mode,
+            "ports": self.ports,
+            "extra_hosts": self.network_mapping,
+            "device_cgroup_rules": self.cgroups_rules,
+            "cap_add": self.capabilities,
+            "cap_drop": self.dropped_capabilities,
+            "ulimits": self.ulimits,
+            "cpu_rt_runtime": self.cpu_rt_runtime,
+            "security_opt": self.security_opt,
+            "environment": self.environment,
+            "mounts": self.mounts,
+            "tmpfs": self.tmpfs,
+            "oom_score_adj": 200,
+        }
+
         # Create & Run container
         try:
-            await self._run(
-                tag=str(self.app.version),
-                name=self.name,
-                hostname=hostname,
-                detach=True,
-                init=self.app.default_init,
-                stdin_open=self.app.with_stdin,
-                network_mode=self.network_mode,
-                pid_mode=self.pid_mode,
-                uts_mode=self.uts_mode,
-                ports=self.ports,
-                extra_hosts=self.network_mapping,
-                device_cgroup_rules=self.cgroups_rules,
-                cap_add=self.capabilities,
-                cap_drop=self.dropped_capabilities,
-                ulimits=self.ulimits,
-                cpu_rt_runtime=self.cpu_rt_runtime,
-                security_opt=self.security_opt,
-                environment=self.environment,
-                mounts=self.mounts,
-                tmpfs=self.tmpfs,
-                oom_score_adj=200,
-            )
+            await self._run_with_gpu_fallback(run_kwargs)
         except DockerNotFound:
             self.sys_resolution.create_issue(
                 IssueType.MISSING_IMAGE,
