@@ -2,6 +2,7 @@
 
 import asyncio
 import errno
+from functools import partial
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 
@@ -15,8 +16,10 @@ from supervisor.coresys import CoreSys
 from supervisor.dbus.const import RaucState
 from supervisor.exceptions import (
     HassOSJobError,
+    HassOSUpdateAlreadyInstalledError,
     HassOSUpdateError,
     HassOSUpdatePendingRebootError,
+    HassOSVariantNotAvailableError,
 )
 from supervisor.resolution.const import (
     ContextType,
@@ -24,6 +27,7 @@ from supervisor.resolution.const import (
     SuggestionType,
     UnhealthyReason,
 )
+from supervisor.utils.sentinel import DEFAULT
 
 from tests.common import MockResponse
 from tests.dbus_service_mocks.base import DBusServiceMock
@@ -83,6 +87,133 @@ def test_ota_url_os_name_rel_5_downgrade(coresys: CoreSys) -> None:
 
     url = coresys.os._get_download_url(AwesomeVersion(versionstr))
     assert url == url_formatted
+
+
+@pytest.mark.parametrize(
+    ("variant", "board"),
+    [(None, "generic-x86-64"), ("nvidia", "generic-x86-64-nvidia")],
+)
+def test_ota_url_variant(coresys: CoreSys, variant: str | None, board: str) -> None:
+    """Test the bundle of an OS variant is named like a board."""
+    url = "https://example.invalid/{version}/{os_name}_{board}-{version}.raucb"
+
+    coresys.os._board = "generic-x86-64"
+    coresys.os._os_name = "haos"
+    coresys.updater._data = {"ota": url}
+
+    assert coresys.os._get_download_url(AwesomeVersion("19.0"), variant) == url.format(
+        version="19.0", board=board, os_name="haos"
+    )
+
+
+@pytest.mark.usefixtures("tmp_supervisor_data")
+async def test_variant_of_version(coresys: CoreSys) -> None:
+    """Test the OS variant is read from the extensions of a version."""
+    coresys.os._board = "ova"
+    extensions = coresys.config.path_os_extensions
+
+    async def variant_of(version: str) -> str | None:
+        return await coresys.run_in_executor(
+            coresys.os._variant_of, AwesomeVersion(version)
+        )
+
+    assert await variant_of("19.0") is None
+
+    await coresys.run_in_executor(partial((extensions / "19.0").mkdir, parents=True))
+    assert await variant_of("19.0") is None
+
+    def create_images() -> None:
+        (extensions / "19.0" / "nvidia-legacy.raw").touch()
+        (extensions / "19.1").mkdir()
+        (extensions / "19.1" / "unknown.raw").touch()
+
+    await coresys.run_in_executor(create_images)
+    assert await variant_of("19.0") == "nvidia-legacy"
+    assert await variant_of("19.1") is None
+
+
+def _setup_os_update(coresys: CoreSys, variant: str | None = None) -> None:
+    coresys.os._available = True
+    coresys.os._board = "generic-x86-64"
+    coresys.os._os_name = "haos"
+    coresys.os._version = AwesomeVersion("19.0")
+    coresys.os._variant = variant
+    coresys.updater._data = {
+        "ota": "https://example.invalid/{version}/{os_name}_{board}-{version}.raucb",
+        "hassos_unrestricted": AwesomeVersion("19.1"),
+    }
+
+
+@pytest.mark.parametrize(
+    ("installed", "requested", "version", "url"),
+    [
+        pytest.param(
+            "nvidia",
+            DEFAULT,
+            "19.1",
+            "https://example.invalid/19.1/haos_generic-x86-64-nvidia-19.1.raucb",
+            id="keep-variant",
+        ),
+        pytest.param(
+            None,
+            "nvidia-legacy",
+            "19.0",
+            "https://example.invalid/19.0/haos_generic-x86-64-nvidia-legacy-19.0.raucb",
+            id="switch-to-variant",
+        ),
+        pytest.param(
+            "nvidia",
+            None,
+            "19.0",
+            "https://example.invalid/19.0/haos_generic-x86-64-19.0.raucb",
+            id="switch-to-plain",
+        ),
+    ],
+)
+@pytest.mark.usefixtures("tmp_supervisor_data", "path_extern", "supervisor_internet")
+async def test_update_variant(
+    coresys: CoreSys,
+    installed: str | None,
+    requested: str | None | type[DEFAULT],
+    version: str,
+    url: str,
+) -> None:
+    """Test an OS update keeps or switches the OS variant."""
+    await coresys.core.set_state(CoreState.RUNNING)
+    _setup_os_update(coresys, installed)
+
+    async def fake_download(url: str, raucb: Path) -> None:
+        raucb.touch()
+
+    with patch.object(
+        coresys.os, "_download_raucb", side_effect=fake_download
+    ) as download:
+        await coresys.os.update(AwesomeVersion(version), requested)
+
+    assert download.call_args.args[0] == url
+
+
+@pytest.mark.usefixtures("tmp_supervisor_data", "supervisor_internet")
+async def test_update_variant_already_installed(coresys: CoreSys) -> None:
+    """Test the running version and variant can't be installed again."""
+    await coresys.core.set_state(CoreState.RUNNING)
+    _setup_os_update(coresys, "nvidia")
+
+    with pytest.raises(HassOSUpdateAlreadyInstalledError):
+        await coresys.os.update(AwesomeVersion("19.0"))
+    with pytest.raises(HassOSUpdateAlreadyInstalledError):
+        await coresys.os.update(AwesomeVersion("19.0"), "nvidia")
+
+
+@pytest.mark.usefixtures("tmp_supervisor_data", "supervisor_internet")
+async def test_update_variant_not_available(coresys: CoreSys) -> None:
+    """Test a variant the board doesn't have is refused."""
+    await coresys.core.set_state(CoreState.RUNNING)
+    _setup_os_update(coresys)
+    coresys.os._board = "rpi5-64"
+
+    with pytest.raises(HassOSVariantNotAvailableError):
+        await coresys.os.update(AwesomeVersion("19.1"), "nvidia")
 
 
 async def test_update_fails_if_out_of_date(

@@ -418,6 +418,20 @@ class HassOSUpdatePendingRebootError(HassOSUpdateError, APIError):
         super().__init__(None, logger)
 
 
+class HassOSVariantNotAvailableError(HassOSUpdateError, APIError):
+    """Raise when the requested OS variant doesn't exist for the board."""
+
+    error_key = "hassos_variant_not_available_error"
+    message_template = "OS variant {variant} is not available for board {board}"
+
+    def __init__(
+        self, logger: Callable[..., None] | None = None, *, variant: str, board: str
+    ) -> None:
+        """Initialize exception."""
+        self.extra_fields = {"variant": variant, "board": board}
+        super().__init__(None, logger)
+
+
 class HassOSJobError(HassOSError, JobException):
     """Function not supported by HassOS."""
 
