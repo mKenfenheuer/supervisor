@@ -1,6 +1,10 @@
 """Calc and represent docker stats data."""
 
 from contextlib import suppress
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..dbus.agent.gpu import GPUContainerUsage
 
 
 class DockerStats:
@@ -16,6 +20,10 @@ class DockerStats:
         self._network_tx = 0
         self._blk_read = 0
         self._blk_write = 0
+        self._container_id: str | None = stats.get("id")
+        self._gpu_memory_usage: int | None = None
+        self._gpu_memory_limit: int | None = None
+        self._gpu_percent: float | None = None
 
         try:
             # cgroupv1 & Docker > 19.03
@@ -53,6 +61,25 @@ class DockerStats:
 
         with suppress(KeyError, TypeError):
             self._calc_block_io(stats["blkio_stats"])
+
+    def set_gpu_usage(
+        self, usage: list[GPUContainerUsage], memory_total: dict[str, int | None]
+    ) -> None:
+        """Add the GPU usage of the container, summed up over its GPUs.
+
+        memory_total holds the memory of each GPU by address.
+        """
+        if not usage:
+            return
+        memory = [u.memory_used for u in usage if u.memory_used is not None]
+        if memory:
+            self._gpu_memory_usage = sum(memory)
+            totals = [memory_total.get(u.address) for u in usage]
+            if all(total is not None for total in totals):
+                self._gpu_memory_limit = sum(totals)  # type: ignore[arg-type]
+        utilization = [u.utilization for u in usage if u.utilization is not None]
+        if utilization:
+            self._gpu_percent = max(utilization)
 
     def _calc_cpu_usage(self, stats):
         """Extract the raw, cumulative CPU counters reported by Docker.
@@ -154,3 +181,30 @@ class DockerStats:
     def blk_write(self):
         """Return block IO write stats."""
         return self._blk_write
+
+    @property
+    def container_id(self) -> str | None:
+        """Return the ID of the container."""
+        return self._container_id
+
+    @property
+    def gpu_memory_usage(self) -> int | None:
+        """Return GPU memory usage in bytes, None if the container uses no GPU."""
+        return self._gpu_memory_usage
+
+    @property
+    def gpu_memory_limit(self) -> int | None:
+        """Return the memory of the GPUs the container uses in bytes."""
+        return self._gpu_memory_limit
+
+    @property
+    def gpu_memory_percent(self) -> float | None:
+        """Return GPU memory usage in percent of the memory of its GPUs."""
+        if not self._gpu_memory_limit or self._gpu_memory_usage is None:
+            return None
+        return round(self._gpu_memory_usage / self._gpu_memory_limit * 100.0, 2)
+
+    @property
+    def gpu_percent(self) -> float | None:
+        """Return the utilization of the busiest GPU the container uses."""
+        return None if self._gpu_percent is None else round(self._gpu_percent, 2)

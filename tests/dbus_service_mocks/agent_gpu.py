@@ -42,6 +42,31 @@ class GPU(DBusServiceMock):
         },
     ]
 
+    response_get_container_usage: list[dict[str, Variant]] | DBusError = [
+        {
+            "Container": Variant(
+                "s", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ),
+            "Address": Variant("s", "0000:01:00.0"),
+            "MemoryUsed": Variant("t", 2405433344),
+            "Utilization": Variant("d", 42.0),
+        },
+        {
+            "Container": Variant(
+                "s", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            ),
+            "Address": Variant("s", "0000:01:00.0"),
+            "MemoryUsed": Variant("t", 954204160),
+        },
+    ]
+
+    @dbus_method()
+    def GetContainerUsage(self) -> "aa{sv}":
+        """Get GPU usage per container."""
+        if isinstance(self.response_get_container_usage, DBusError):
+            raise self.response_get_container_usage  # pylint: disable=raising-bad-type
+        return self.response_get_container_usage
+
     @dbus_method()
     def GetDevices(self) -> "aa{sv}":
         """Get GPU devices."""

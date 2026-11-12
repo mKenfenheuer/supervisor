@@ -5,7 +5,7 @@ from dbus_fast.aio.message_bus import MessageBus
 import pytest
 
 from supervisor.dbus.agent import OSAgent
-from supervisor.dbus.agent.gpu import GPUDevice
+from supervisor.dbus.agent.gpu import GPUContainerUsage, GPUDevice
 from supervisor.exceptions import DBusError as SupervisorDBusError
 
 from tests.dbus_service_mocks.agent_gpu import GPU as GPUService
@@ -61,6 +61,42 @@ async def test_dbus_osagent_gpu_devices(
     gpu_service.response_get_devices = DBusError(ErrorType.FAILED, "nvidia-smi")
     with pytest.raises(SupervisorDBusError):
         await os_agent.gpu.get_devices()
+
+
+@pytest.mark.parametrize("os_agent_version", ["1.15.0"], indirect=True)
+@pytest.mark.usefixtures("os_agent_version")
+async def test_dbus_osagent_gpu_container_usage(
+    gpu_service: GPUService, dbus_session_bus: MessageBus
+):
+    """Test GPU usage per container and the cached memory of the GPUs."""
+    gpu_service.GetDevices.calls.clear()
+    os_agent = OSAgent()
+    await os_agent.connect(dbus_session_bus)
+
+    assert await os_agent.gpu.get_container_usage() == [
+        GPUContainerUsage(
+            container="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            address="0000:01:00.0",
+            memory_used=2405433344,
+            utilization=42.0,
+        ),
+        GPUContainerUsage(
+            container="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            address="0000:01:00.0",
+            memory_used=954204160,
+            utilization=None,
+        ),
+    ]
+
+    # The memory of a GPU is read once
+    assert await os_agent.gpu.get_memory_total("0000:01:00.0") == 25769803776
+    assert await os_agent.gpu.get_memory_total("0000:01:00.0") == 25769803776
+    assert await os_agent.gpu.get_memory_total("0000:00:02.0") is None
+    assert gpu_service.GetDevices.calls == [()]
+
+    gpu_service.response_get_container_usage = DBusError(ErrorType.FAILED, "nvidia-smi")
+    with pytest.raises(SupervisorDBusError):
+        await os_agent.gpu.get_container_usage()
 
 
 @pytest.mark.usefixtures("os_agent_services")

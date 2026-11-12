@@ -21,6 +21,10 @@ from ..const import (
     ATTR_CPU_PERCENT,
     ATTR_CPU_SYSTEM_USAGE,
     ATTR_CPU_USAGE,
+    ATTR_GPU_MEMORY_LIMIT,
+    ATTR_GPU_MEMORY_PERCENT,
+    ATTR_GPU_MEMORY_USAGE,
+    ATTR_GPU_PERCENT,
     ATTR_MEMORY_LIMIT,
     ATTR_MEMORY_PERCENT,
     ATTR_MEMORY_USAGE,
@@ -158,6 +162,10 @@ def api_return_stats(stats: DockerStats, *, legacy: bool) -> dict[str, Any]:
         ATTR_NETWORK_TX: stats.network_tx,
         ATTR_BLK_READ: stats.blk_read,
         ATTR_BLK_WRITE: stats.blk_write,
+        ATTR_GPU_MEMORY_USAGE: stats.gpu_memory_usage,
+        ATTR_GPU_MEMORY_LIMIT: stats.gpu_memory_limit,
+        ATTR_GPU_MEMORY_PERCENT: stats.gpu_memory_percent,
+        ATTR_GPU_PERCENT: stats.gpu_percent,
     }
     if legacy:
         data[ATTR_CPU_PERCENT] = stats.cpu_percent
