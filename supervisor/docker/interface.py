@@ -29,6 +29,9 @@ from ..const import (
 )
 from ..coresys import CoreSys
 from ..exceptions import (
+    DBusError,
+    DBusInterfaceError,
+    DBusNotConnectedError,
     DockerAPIError,
     DockerError,
     DockerHubRateLimitExceeded,
@@ -721,8 +724,31 @@ class DockerInterface(JobGroup, ABC):
 
     async def stats(self, *, one_shot: bool = False) -> DockerStats:
         """Read and return stats from container."""
-        stats = await self.sys_docker.container_stats(self.name, one_shot=one_shot)
-        return DockerStats(stats)
+        stats = DockerStats(
+            await self.sys_docker.container_stats(self.name, one_shot=one_shot)
+        )
+        await self._add_gpu_usage(stats)
+        return stats
+
+    async def _add_gpu_usage(self, stats: DockerStats) -> None:
+        """Add the GPU usage of the container from OS Agent, if it has any."""
+        gpu = self.sys_dbus.agent.gpu
+        if not gpu.is_connected or not stats.container_id:
+            return
+        try:
+            usage = [
+                u
+                for u in await gpu.get_container_usage()
+                if u.container == stats.container_id
+            ]
+            memory_total = {
+                u.address: await gpu.get_memory_total(u.address) for u in usage
+            }
+        except (DBusError, DBusInterfaceError, DBusNotConnectedError) as err:
+            # e.g. OS Agent without GPU usage per container
+            _LOGGER.debug("Can't get GPU usage of %s: %s", self.name, err)
+            return
+        stats.set_gpu_usage(usage, memory_total)
 
     async def is_failed(self) -> bool:
         """Return True if Docker is failing state."""

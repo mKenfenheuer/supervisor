@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock, PropertyMock, patch
 from aiodocker.containers import DockerContainer
 from aiohttp.test_utils import TestClient
 from awesomeversion import AwesomeVersion
+from dbus_fast.aio.message_bus import MessageBus
 import pytest
 
 from supervisor.backups.manager import BackupManager
@@ -88,6 +89,50 @@ async def test_api_stats(
     assert result["data"]["memory_usage"] == 59700000
     assert result["data"]["memory_limit"] == 4000000000
     assert result["data"]["memory_percent"] == 1.49
+
+
+@pytest.mark.parametrize("os_agent_version", ["1.15.0"], indirect=True)
+@pytest.mark.usefixtures("os_agent_version")
+async def test_api_stats_gpu(
+    core_api_client_with_root: tuple[TestClient, str],
+    container: DockerContainer,
+    coresys: CoreSys,
+    dbus_session_bus: MessageBus,
+):
+    """Test stats with the GPU usage of the container from OS Agent."""
+    await coresys.dbus.agent.connect(dbus_session_bus)
+    api_client, root = core_api_client_with_root
+    container.show.return_value["State"]["Status"] = "running"
+    container.show.return_value["State"]["Running"] = True
+
+    stats_fixture = load_json_fixture("container_stats.json")
+    stats_fixture["id"] = (
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    )
+    container.stats = AsyncMock(return_value=[stats_fixture])
+    with patch.object(
+        DockerAPI, "_query_one_shot_stats", AsyncMock(return_value=stats_fixture)
+    ):
+        resp = await api_client.get(f"{root}/stats")
+
+    assert resp.status == 200
+    result = await resp.json()
+    assert result["data"]["gpu_memory_usage"] == 2405433344
+    assert result["data"]["gpu_memory_limit"] == 25769803776
+    assert result["data"]["gpu_memory_percent"] == 9.33
+    assert result["data"]["gpu_percent"] == 42.0
+
+    # A container without GPU usage
+    stats_fixture["id"] = (
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    )
+    with patch.object(
+        DockerAPI, "_query_one_shot_stats", AsyncMock(return_value=stats_fixture)
+    ):
+        resp = await api_client.get(f"{root}/stats")
+    result = await resp.json()
+    assert result["data"]["gpu_memory_usage"] is None
+    assert result["data"]["gpu_percent"] is None
 
 
 async def test_api_stats_one_shot(
