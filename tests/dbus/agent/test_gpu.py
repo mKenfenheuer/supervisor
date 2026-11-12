@@ -28,6 +28,7 @@ async def test_dbus_osagent_gpu_devices(
     """Test GPU devices with statistics from the host."""
     os_agent = OSAgent()
     await os_agent.connect(dbus_session_bus)
+    gpu_service.GetDevices.calls.clear()
 
     assert os_agent.gpu.is_connected
     assert await os_agent.gpu.get_devices() == [
